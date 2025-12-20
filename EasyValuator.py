@@ -10,9 +10,9 @@ from typing import Optional
 # Target currency for output
 TARGET_CURRENCY = "EUR"
 
-# ---------------------------
+# --------------------------------
 # Foreign Exchange (FX) Utilities
-# ---------------------------
+# --------------------------------
 
 @lru_cache(maxsize=None)
 def get_exchange_rate(currency_from: str, currency_to: str) -> Optional[float]:
@@ -66,3 +66,50 @@ def get_exchange_rate(currency_from: str, currency_to: str) -> Optional[float]:
         pass
 
     return None
+
+def convert_to_target_currency(amount: float, from_currency: str) -> Optional[float]:
+    """
+    Converts a monetary amount from source currency to the predefined target currency.
+
+    This function serves as the main interface for currency conversion operations,
+    handling edge cases and delegating to the exchange rate service.
+
+    Args:
+        amount (float): The monetary amount to convert
+        from_currency (str): The source currency code
+
+    Returns:
+        Optional[float]: The converted amount in target currency, or original amount
+                        if conversion is not possible/necessary.
+
+    Examples:
+        convert_to_target_currency(100, 'USD')  # Assuming TARGET_CURRENCY = 'EUR'
+        86.74  # Example conversion rate - actual rate varies by market conditions
+        convert_to_target_currency(100, 'EUR')  # Same currency
+        100.0
+
+    Notes:
+        - Returns None if input amount is None
+        - Returns original amount if source currency is None
+        - Bypasses conversion for same-currency scenarios
+        - Falls back to original amount if exchange rate is unavailable
+    """
+    # Handle null input values
+    if amount is None:
+        return None
+
+    # Return amount as-is if no source currency specified
+    if from_currency is None:
+        return amount
+
+    # Skip conversion for same currency to avoid unnecessary API calls
+    if from_currency.upper() == TARGET_CURRENCY.upper():
+        return amount
+
+    # Retrieve exchange rate and apply conversion
+    rate = get_exchange_rate(from_currency, TARGET_CURRENCY)
+    if rate:
+        return amount * rate
+
+    # Graceful degradation: return original amount if conversion fails
+    return amount
