@@ -113,3 +113,66 @@ def convert_to_target_currency(amount: float, from_currency: str) -> Optional[fl
 
     # Graceful degradation: return original amount if conversion fails
     return amount
+
+# -------------------------------
+# Country and Regional Detection
+# -------------------------------
+
+def get_country_from_ticker(t: yf.Ticker) -> str:
+    """
+    Determines the country or region of a company based on ticker metadata.
+
+    This function analyzes both exchange information and explicit country data
+    from Yahoo Finance to classify companies into major economic regions.
+
+    Args:
+        t (yf.Ticker): Yahoo Finance ticker object with company metadata
+
+    Returns:
+        str: Two-letter region code ('US', 'EU', 'UK', 'CN', 'JP')
+
+    Notes:
+        - Prioritizes exchange detection for more reliable classification
+        - Falls back to country name matching when exchange data is ambiguous
+        - Defaults to 'US' for unclassified cases (most common scenario)
+        - Handles missing info gracefully with empty dict fallback
+    """
+    # Safely extract ticker info with exception handling
+    try:
+        info = t.info
+    except Exception:
+        info = {}
+
+    # Normalize string values for case-insensitive comparison
+    exchange = (info.get('exchange') or "").upper()
+    country_code = (info.get('country') or "").upper()
+
+    # European exchange detection (Frankfurt, Paris, Xetra, etc.)
+    if any(x in exchange for x in ['FRA', 'PAR', 'GER', 'XETRA']):
+        return 'EU'
+
+    # London Stock Exchange detection
+    elif 'LON' in exchange or 'LSE' in exchange:
+        return 'UK'
+
+    # Country-based classification for European nations
+    elif country_code in ['GERMANY', 'FRANCE', 'ITALY', 'SPAIN', 'NETHERLANDS']:
+        return 'EU'
+
+    # United Kingdom classification
+    elif country_code in ['UNITED KINGDOM', 'UK']:
+        return 'UK'
+
+    # Greater China region classification
+    elif country_code in ['CHINA', 'HONG KONG']:
+        return 'CN'
+
+    # Japan classification
+    elif country_code in ['JAPAN']:
+        return 'JP'
+
+    # Default to United States (most common case)
+    else:
+        return 'US'
+
+# ---------------------------
