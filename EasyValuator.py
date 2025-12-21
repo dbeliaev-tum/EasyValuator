@@ -176,3 +176,89 @@ def get_country_from_ticker(t: yf.Ticker) -> str:
         return 'US'
 
 # ---------------------------
+# Risk-Free Rate Calculation
+# ---------------------------
+
+def get_risk_free_rate(country: str = 'US') -> float:
+    """
+    Calculates the appropriate risk-free rate for a given country/region.
+
+    Uses US Treasury yields as a baseline and applies regional adjustments
+    based on historical interest rate differentials. Implements robust fallback
+    mechanisms for reliability.
+
+    Args:
+        country (str): Two-letter region code ('US', 'EU', 'UK', 'CN', 'JP')
+
+    Returns:
+        float: Annual risk-free rate as decimal (e.g., 0.041 for 4.1%)
+
+    Strategy:
+        1. Attempt to fetch current US Treasury yield from Yahoo Finance
+        2. Apply regional adjustment based on historical spreads
+        3. Validate result within reasonable bounds
+        4. Fall back to conservative historical averages if fetch fails
+
+    Sources:
+        - US Treasury: ^TNX (10-Year Treasury Note Yield)
+        - Adjustments based on OECD and central bank data
+    """
+    # Yahoo Finance tickers for government bond yields
+    # Note: Using US Treasury as proxy with regional adjustments
+    bond_tickers = {
+        'US': '^TNX',  # US 10-Year Treasury Note
+        'EU': '^TNX',
+        'UK': '^TNX',
+        'CN': '^TNX',
+        'JP': '^TNX'
+    }
+
+    # Regional adjustments to US Treasury rates (based on historical spreads)
+    # These reflect typical interest rate differentials between regions
+    regional_adjustments = {
+        'US': 0.0,  # Baseline (no adjustment)
+        'EU': -0.015,  # EU rates historically ~1.5% lower than US
+        'UK': -0.005,  # UK rates slightly lower than US
+        'CN': -0.005,  # China similar to UK in recent years
+        'JP': -0.035  # Japan significantly lower due to monetary policy
+    }
+
+    # Conservative fallback rates based on recent historical averages
+    # Used when real-time data is unavailable
+    default_rates = {
+        'US': 0.041,  # ~4.1% - recent US 10-year average
+        'EU': 0.026,  # ~2.6% - European Central Bank targets
+        'UK': 0.036,  # ~3.6% - Bank of England benchmarks
+        'CN': 0.028,  # ~2.8% - People's Bank of China rates
+        'JP': 0.006  # ~0.6% - Bank of Japan ultra-low rates
+    }
+
+    # Get appropriate ticker symbol for the region
+    ticker_symbol = bond_tickers.get(country, '^TNX')
+
+    try:
+        # Fetch recent bond yield data
+        treasury = yf.Ticker(ticker_symbol)
+        hist = treasury.history(period="5d")
+
+        if not hist.empty:
+            # Extract most recent closing yield
+            rate = float(hist['Close'].iloc[-1])
+
+            # Convert percentage format to decimal (e.g., 4.14% → 0.0414)
+            if rate > 1.0:
+                rate = rate / 100.0
+
+            # Apply region-specific adjustment to US baseline
+            rate += regional_adjustments.get(country, 0.0)
+
+            # Validate rate is within economically plausible bounds
+            if 0.001 < rate < 0.10:
+                return rate
+
+    except Exception:
+        # Logging recommended here in production environment
+        pass
+
+    # Fallback to conservative historical averages if real-time fetch fails
+    return default_rates.get(country, 0.04)
