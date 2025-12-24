@@ -262,3 +262,43 @@ def get_risk_free_rate(country: str = 'US') -> float:
 
     # Fallback to conservative historical averages if real-time fetch fails
     return default_rates.get(country, 0.04)
+
+# -------------------------------
+# Market Risk Premium Calculation
+# -------------------------------
+
+def get_market_risk_premium(country: str = 'US') -> float:
+    """
+    Provides historically-validated market risk premiums by region.
+
+    The equity risk premium represents the excess return investors expect
+    from stocks over the risk-free rate. Based on long-term academic research
+    and historical market data.
+
+    Args:
+        country (str): Two-letter region code ('US', 'EU', 'UK', 'CN', 'JP')
+
+    Returns:
+        float: Market risk premium as decimal (e.g., 0.055 for 5.5%)
+
+    Sources:
+        - Damodaran datasets on historical equity risk premiums
+        - Academic studies on long-term market returns
+        - IMF and World Bank economic research
+
+    Rationale:
+        - Developed markets (US, EU, UK, JP): 5.5% long-term average
+        - Emerging markets (CN): Higher premium for increased risk
+        - Conservative estimates to avoid over-optimistic valuations
+    """
+    # Historically-validated equity risk premiums by economic region
+    # These reflect long-term excess returns of equities over government bonds
+    mrp_by_region = {
+        'US': 0.055,  # 5.5% - US historical equity risk premium (1928-present)
+        'EU': 0.055,  # 5.5% - Similar to US for developed European markets
+        'UK': 0.055,  # 5.5% - UK long-term premium aligns with US/EU
+        'CN': 0.070,  # 7.0% - Higher premium for emerging market volatility
+        'JP': 0.055  # 5.5% - Developed market with established risk premium
+    }
+
+    return mrp_by_region.get(country, 0.055)
