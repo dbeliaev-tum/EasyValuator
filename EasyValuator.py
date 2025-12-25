@@ -302,3 +302,88 @@ def get_market_risk_premium(country: str = 'US') -> float:
     }
 
     return mrp_by_region.get(country, 0.055)
+
+# ------------------------------------
+# Historical Free Cash Flow Extraction
+# ------------------------------------
+
+def get_historical_fcf(t: yf.Ticker) -> pd.Series:
+    """
+    Extracts historical Free Cash Flow (FCF) from company cash flow statements.
+
+    Free Cash Flow is a critical valuation metric calculated as:
+    FCF = Operating Cash Flow - Capital Expenditures
+
+    This function handles variations in financial statement labeling across different
+    companies and reporting standards to ensure robust FCF calculation.
+
+    Args:
+        t (yf.Ticker): Yahoo Finance ticker object with financial data
+
+    Returns:
+        pd.Series: Historical Free Cash Flow values with datetime indices,
+                  sorted chronologically for time series analysis
+
+    Raises:
+        ValueError: When no cash flow data is available or required fields are missing
+
+    Notes:
+        - Supports multiple common field names for operating cash flow and capex
+        - Handles data type conversion and missing value cleaning
+        - Returns data in chronological order for time series modeling
+    """
+    # Retrieve cash flow statement data
+    cashflow = t.cashflow
+    if cashflow is None or cashflow.empty:
+        raise ValueError("No cashflow data available for financial analysis")
+
+    # Transpose for time series analysis (dates as index)
+    cf = cashflow.T
+
+    # Define common field names for operating cash flow across reporting standards
+    # Different companies may use varying terminology in their financial statements
+    op_cash_fields = [
+        'Total Cash From Operating Activities',  # Most common US GAAP
+        'Operating Cash Flow',  # Alternative labeling
+        'Cash From Operating Activities'  # International standards
+    ]
+
+    # Define common field names for capital expenditures
+    capex_fields = [
+        'Capital Expenditures',  # Standard term
+        'Capital Expenditure',  # Singular form
+        'Purchase Of Property Plant And Equipment'  # Detailed description
+    ]
+
+    # Initialize variables for field detection
+    op_cash = None
+    capex = None
+
+    # Find operating cash flow field using priority order
+    for field in op_cash_fields:
+        if field in cf.columns:
+            op_cash = cf[field]
+            break
+
+    # Find capital expenditures field using priority order
+    for field in capex_fields:
+        if field in cf.columns:
+            capex = cf[field]
+            break
+
+    # Validate that both required financial components are found
+    if op_cash is None or capex is None:
+        raise ValueError(
+            "Could not locate required cash flow statement fields. "
+            "Available columns: " + ", ".join(cf.columns.tolist())
+        )
+
+    # Calculate Free Cash Flow: Operating Cash Flow minus Capital Expenditures
+    # This represents cash available to investors after reinvestment needs
+    fcf = op_cash - capex
+
+    # Ensure numerical data types and remove any invalid entries
+    fcf = pd.to_numeric(fcf, errors='coerce').dropna()
+
+    # Return chronologically sorted time series for analysis
+    return fcf.sort_index()
