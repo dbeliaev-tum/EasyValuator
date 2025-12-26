@@ -387,3 +387,77 @@ def get_historical_fcf(t: yf.Ticker) -> pd.Series:
 
     # Return chronologically sorted time series for analysis
     return fcf.sort_index()
+
+# ---------------------------
+# Free Cash Flow Forecasting
+# ---------------------------
+
+def forecast_fcf(historical_fcf: pd.Series, years: int = 5) -> tuple:
+    """
+    Forecasts future Free Cash Flows using a decaying growth rate model.
+
+    Implements a realistic growth transition from historical CAGR towards
+    a sustainable terminal growth rate, reflecting typical business maturity patterns.
+
+    Args:
+        historical_fcf (pd.Series): Historical Free Cash Flow values (chronologically ordered)
+        years (int): Forecast horizon in years (default: 5)
+
+    Returns:
+        tuple: Contains two elements:
+            - list: Forecasted FCF values for each year
+            - float: Calculated historical Compound Annual Growth Rate (CAGR)
+
+    Raises:
+        ValueError: When insufficient historical data is provided
+
+    Model Description:
+        - Uses historical CAGR as starting growth rate
+        - Applies linear decay towards terminal growth rate over forecast period
+        - Handles edge cases with negative or zero starting FCF values
+        - Implements reasonable growth rate boundaries for financial realism
+    """
+    # Validate sufficient historical data for meaningful analysis
+    if len(historical_fcf) < 2:
+        raise ValueError("Minimum 2 years of historical FCF data required for growth calculation")
+
+    # Extract key historical reference points
+    first_value = historical_fcf.iloc[0]  # Oldest FCF value
+    last_value = historical_fcf.iloc[-1]  # Most recent FCF value
+    num_years = len(historical_fcf) - 1  # Historical period length
+
+    # Calculate historical growth rate with robust error handling
+    if first_value <= 0:
+        # Alternative calculation for negative/zero starting FCF
+        # Use average periodic growth rates instead of CAGR formula
+        growth_rates = historical_fcf.pct_change().dropna()
+        cagr = growth_rates.mean() if not growth_rates.empty else 0.05
+    else:
+        # Standard CAGR calculation: (End/Start)^(1/Periods) - 1
+        cagr = (last_value / first_value) ** (1 / num_years) - 1
+
+    # Apply reasonable growth rate constraints for financial modeling
+    # Maximum: 15% (avoiding unrealistic perpetual high growth)
+    # Minimum: -5% (allowing for decline but not catastrophic collapse)
+    cagr = max(min(cagr, 0.15), -0.05)
+
+    # Terminal growth rate: long-term sustainable growth assumption
+    # 1.5% approximates nominal GDP growth in developed economies
+    terminal_growth = 0.015
+
+    # Initialize forecasting variables
+    forecasts = []
+    current_fcf = float(last_value)  # Start from most recent actual FCF
+
+    # Generate year-by-year forecasts
+    for year in range(1, years + 1):
+        # Calculate decaying growth rate: transition from CAGR to terminal growth
+        # Linear decay gives smooth transition over forecast period
+        decay_factor = (years - year) / years
+        growth_rate = cagr * decay_factor + terminal_growth * (1 - decay_factor)
+
+        # Apply growth rate to current FCF and store result
+        current_fcf = current_fcf * (1 + growth_rate)
+        forecasts.append(current_fcf)
+
+    return forecasts, cagr
