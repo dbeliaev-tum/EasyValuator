@@ -461,3 +461,106 @@ def forecast_fcf(historical_fcf: pd.Series, years: int = 5) -> tuple:
         forecasts.append(current_fcf)
 
     return forecasts, cagr
+
+# ----------------------------------------------------
+# Weighted Average Cost of Capital (WACC) Calculation
+# ----------------------------------------------------
+
+def calculate_wacc(t: yf.Ticker, country: str = 'US', risk_free_rate: float = None,
+                   market_risk_premium: float = None) -> float:
+    """
+    Calculates the Weighted Average Cost of Capital (WACC) for company valuation.
+
+    WACC represents the blended cost of capital from all sources (equity and debt),
+    serving as the discount rate in DCF analysis. It reflects the minimum return
+    required by all capital providers.
+
+    Formula: WACC = (E/V) * Re + (D/V) * Rd * (1 - Tc)
+    Where:
+        E = Market value of equity
+        D = Market value of debt
+        V = E + D (Total enterprise value)
+        Re = Cost of equity (calculated via CAPM)
+        Rd = Cost of debt
+        Tc = Corporate tax rate
+
+    Args:
+        t (yf.Ticker): Yahoo Finance ticker object with company financial data
+        country (str): Country code for regional risk parameters
+        risk_free_rate (float): Pre-calculated risk-free rate, defaults to country-specific
+        market_risk_premium (float): Pre-calculated market risk premium, defaults to country-specific
+
+    Returns:
+        float: WACC percentage as decimal (e.g., 0.085 for 8.5%)
+
+    Notes:
+        - Implements CAPM for cost of equity calculation
+        - Uses current market data for capital structure weights
+        - Applies reasonable bounds to prevent unrealistic outputs
+        - Handles missing data with robust fallback mechanisms
+    """
+    # Safely extract company information
+    info = t.info or {}
+
+    # Retrieve market rates if not provided
+    if risk_free_rate is None:
+        risk_free_rate = get_risk_free_rate(country)
+    if market_risk_premium is None:
+        market_risk_premium = get_market_risk_premium(country)
+
+    # Extract and validate beta (systematic risk measure)
+    beta = info.get('beta', 1.0)
+    if beta is None or pd.isna(beta):
+        beta = 1.0  # Default to market-average risk
+
+    # Constrain beta to reasonable financial bounds (0.5 to 2.0)
+    # Prevents extreme values from distorting cost of equity
+    beta = max(0.5, min(beta, 2.0))
+
+    # Calculate Cost of Equity using Capital Asset Pricing Model (CAPM)
+    # CAPM: Cost of Equity = Risk-Free Rate + Beta * Market Risk Premium
+    cost_of_equity = risk_free_rate + beta * market_risk_premium
+
+    # Extract market capitalization and debt for capital structure
+    market_cap = info.get('marketCap', 0)
+    total_debt = info.get('totalDebt', 0) or 0
+
+    # Fallback calculation if market cap is missing
+    if not market_cap or market_cap == 0:
+        current_price = info.get('currentPrice', info.get('regularMarketPrice', 100))
+        shares = info.get('sharesOutstanding', 1)
+        market_cap = current_price * shares
+
+    # Calculate Cost of Debt
+    interest_expense = info.get('interestExpense', 0)
+    if interest_expense and total_debt > 0:
+        # Cost of Debt = Interest Expense / Total Debt
+        cost_of_debt = abs(interest_expense) / total_debt
+    else:
+        # Fallback assumption for companies without clear interest data
+        cost_of_debt = 0.05  # 5% typical corporate debt cost
+
+    # Corporate tax rate assumption (US federal average)
+    tax_rate = 0.21
+
+    # Calculate total enterprise value (equity + debt)
+    total_value = market_cap + total_debt
+
+    # Calculate WACC using capital structure weights
+    if total_value > 0:
+        equity_weight = market_cap / total_value
+        debt_weight = total_debt / total_value
+
+        # WACC formula with tax shield on debt
+        wacc = (equity_weight * cost_of_equity +
+                debt_weight * cost_of_debt * (1 - tax_rate))
+    else:
+        # Fallback to cost of equity for companies with no discernible capital structure
+        wacc = cost_of_equity
+
+    # Apply reasonable financial bounds to WACC
+    # Minimum 6%: Accounts for basic risk premium over risk-free rate
+    # Maximum 20%: Prevents unrealistically high discount rates
+    wacc = max(0.06, min(wacc, 0.20))
+
+    return wacc
