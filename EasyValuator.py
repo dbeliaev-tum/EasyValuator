@@ -631,3 +631,158 @@ def calculate_dcf(forecasts: list, wacc: float, terminal_growth: float,
         'pv_fcf': pv_fcf,
         'pv_terminal': pv_terminal
     }
+
+# ------------------------
+# Main Valuation Function
+# ------------------------
+
+def price_stock(ticker_symbol: str, forecast_years: int = 5) -> dict:
+    """
+    Main function to perform comprehensive DCF valuation analysis.
+
+    Orchestrates the complete valuation pipeline from data collection through
+    final fair value calculation, providing detailed intermediate results.
+
+    Args:
+        ticker_symbol (str): Stock ticker symbol to analyze
+        forecast_years (int): Number of years for explicit forecast period
+
+    Returns:
+        dict: Complete valuation results including all intermediate calculations
+
+    Workflow:
+        1. Company data collection and currency normalization
+        2. Historical FCF analysis and trend identification
+        3. Future FCF projections using growth decay model
+        4. Market parameter determination (risk-free rate, MRP)
+        5. WACC calculation reflecting company-specific risk
+        6. DCF valuation with terminal value
+        7. Comprehensive results reporting
+    """
+    # Normalize ticker symbol and initialize analysis
+    ticker_symbol = ticker_symbol.upper()
+    print(f"\n{'=' * 60}")
+    print(f"DCF Analysis for {ticker_symbol}")
+    print(f"{'=' * 60}\n")
+
+    # Create Yahoo Finance ticker object
+    t = yf.Ticker(ticker_symbol)
+    info = t.info or {}
+
+    # Extract company identification and pricing data
+    company_name = info.get('longName', ticker_symbol)
+    original_currency = info.get('currency', 'USD')
+    current_price_original = info.get('currentPrice', info.get('regularMarketPrice'))
+
+    # Determine company geographic exposure for regional parameters
+    country = get_country_from_ticker(t)
+
+    # Convert all values to target currency for consistent analysis
+    current_price = convert_to_target_currency(current_price_original, original_currency)
+
+    # Display company overview
+    print(f"Company: {company_name}")
+    print(f"Country/Region: {country}")
+    print(f"Original Currency: {original_currency}")
+    if current_price_original and current_price:
+        print(
+            f"Current Price: {current_price_original:.2f} {original_currency} = {current_price:.2f} {TARGET_CURRENCY}\n")
+    else:
+        print(f"Current Price: Not available\n")
+
+    # Step 1: Historical Free Cash Flow Analysis
+    print("Step 1: Historical Free Cash Flow")
+    print("-" * 60)
+    historical_fcf = get_historical_fcf(t)
+    # Convert historical FCF to target currency for consistent valuation
+    historical_fcf_eur = historical_fcf.apply(lambda x: convert_to_target_currency(x, original_currency))
+    print(f"(Converted from {original_currency} to {TARGET_CURRENCY})")
+    for date, value in historical_fcf_eur.items():
+        year = date.year if hasattr(date, 'year') else date
+        print(f"{year}: {value:,.0f} {TARGET_CURRENCY}")
+    print()
+
+    # Step 2: Future Free Cash Flow Projections
+    print(f"Step 2: Forecast FCF (next {forecast_years} years)")
+    print("-" * 60)
+    forecasts, cagr = forecast_fcf(historical_fcf, years=forecast_years)
+    # Convert forecasted FCF to target currency
+    forecasts_eur = [convert_to_target_currency(fcf, original_currency) for fcf in forecasts]
+    print(f"Historical CAGR: {cagr * 100:.2f}%")
+    for year, fcf in enumerate(forecasts_eur, start=1):
+        print(f"Year {year}: {fcf:,.0f} {TARGET_CURRENCY}")
+    print()
+
+    # Step 3: Market Parameter Determination
+    print("Step 3: Market Parameters")
+    print("-" * 60)
+    risk_free = get_risk_free_rate(country)
+    mrp = get_market_risk_premium(country)
+    print(f"Risk-Free Rate ({country}): {risk_free * 100:.2f}%")
+    print(f"Market Risk Premium ({country}): {mrp * 100:.2f}%")
+    print()
+
+    # Step 4: Weighted Average Cost of Capital Calculation
+    print("Step 4: Calculate WACC")
+    print("-" * 60)
+    wacc = calculate_wacc(t, country, risk_free, mrp)
+    beta = info.get('beta', 1.0) or 1.0
+    print(f"Beta: {beta:.2f}")
+    print(f"WACC: {wacc * 100:.2f}%")
+    print()
+
+    # Step 5: Company Financial Position Analysis
+    shares_outstanding = info.get('sharesOutstanding', 1)
+    total_debt = info.get('totalDebt', 0) or 0
+    total_cash = info.get('totalCash', 0) or 0
+    net_debt = total_debt - total_cash  # Key adjustment for equity value
+
+    # Convert balance sheet items to target currency
+    total_debt_eur = convert_to_target_currency(total_debt, original_currency)
+    total_cash_eur = convert_to_target_currency(total_cash, original_currency)
+    net_debt_eur = convert_to_target_currency(net_debt, original_currency)
+
+    print("Step 5: Company Financials")
+    print("-" * 60)
+    print(f"Shares Outstanding: {shares_outstanding:,.0f}")
+    print(f"Total Debt: {total_debt_eur:,.0f} {TARGET_CURRENCY}")
+    print(f"Total Cash: {total_cash_eur:,.0f} {TARGET_CURRENCY}")
+    print(f"Net Debt: {net_debt_eur:,.0f} {TARGET_CURRENCY}")
+    print()
+
+    # Step 6: DCF Valuation Calculation
+    print("Step 6: DCF Valuation")
+    print("-" * 60)
+    terminal_growth = 0.025  # 2.5% long-term growth assumption (inflation + real growth)
+    dcf_result = calculate_dcf(forecasts, wacc, terminal_growth, shares_outstanding, net_debt)
+
+    # Convert all valuation outputs to target currency
+    pv_fcf_eur = convert_to_target_currency(dcf_result['pv_fcf'], original_currency)
+    pv_terminal_eur = convert_to_target_currency(dcf_result['pv_terminal'], original_currency)
+    enterprise_value_eur = convert_to_target_currency(dcf_result['enterprise_value'], original_currency)
+    equity_value_eur = convert_to_target_currency(dcf_result['equity_value'], original_currency)
+    fair_price_eur = convert_to_target_currency(dcf_result['price_per_share'], original_currency)
+
+    print(f"PV of Forecast Period: {pv_fcf_eur:,.0f} {TARGET_CURRENCY}")
+    print(f"PV of Terminal Value: {pv_terminal_eur:,.0f} {TARGET_CURRENCY}")
+    print(f"Enterprise Value: {enterprise_value_eur:,.0f} {TARGET_CURRENCY}")
+    print(f"Equity Value: {equity_value_eur:,.0f} {TARGET_CURRENCY}")
+    print()
+
+    # Final Valuation Conclusion
+    print("=" * 60)
+    print(f"FAIR VALUE: {fair_price_eur:.2f} {TARGET_CURRENCY}")
+    if current_price:
+        print(f"CURRENT PRICE: {current_price:.2f} {TARGET_CURRENCY}")
+        upside = ((fair_price_eur - current_price) / current_price) * 100
+        print(f"UPSIDE/DOWNSIDE: {upside:+.1f}%")
+    print("=" * 60)
+
+    return {
+        **dcf_result,
+        'fair_price_eur': fair_price_eur,
+        'original_currency': original_currency,
+        'country': country,
+        'wacc': wacc,
+        'cagr': cagr
+    }
