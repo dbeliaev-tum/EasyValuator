@@ -564,3 +564,70 @@ def calculate_wacc(t: yf.Ticker, country: str = 'US', risk_free_rate: float = No
     wacc = max(0.06, min(wacc, 0.20))
 
     return wacc
+
+# -------------------------------------
+# Discounted Cash Flow (DCF) Valuation
+# -------------------------------------
+
+def calculate_dcf(forecasts: list, wacc: float, terminal_growth: float,
+                  shares_outstanding: float, net_debt: float) -> dict:
+    """
+    Performs Discounted Cash Flow valuation to determine intrinsic company value.
+
+    The DCF model values a company based on the present value of its future cash flows,
+    including both an explicit forecast period and a terminal value capturing perpetuity growth.
+
+    Args:
+        forecasts (list): Projected free cash flows for explicit forecast period
+        wacc (float): Weighted Average Cost of Capital (discount rate)
+        terminal_growth (float): Long-term perpetual growth rate assumption
+        shares_outstanding (float): Number of shares outstanding for per-share calculation
+        net_debt (float): Net debt (total debt minus cash) for equity value adjustment
+
+    Returns:
+        dict: Comprehensive valuation results containing:
+            - enterprise_value: Total business value
+            - equity_value: Value attributable to shareholders
+            - price_per_share: Fair value per share
+            - pv_fcf: Present value of explicit forecast period
+            - pv_terminal: Present value of terminal value
+
+    Methodology:
+        - Two-stage model: explicit forecast + terminal value
+        - Gordon Growth Model for terminal value calculation
+        - Present value discounting using WACC
+        - Net debt adjustment to derive equity value from enterprise value
+    """
+    # Calculate Present Value of explicit forecast period cash flows
+    pv_fcf = 0.0
+    for year, fcf in enumerate(forecasts, start=1):
+        # Discount each year's FCF to present value: FCF / (1 + WACC)^year
+        pv_fcf += fcf / ((1 + wacc) ** year)
+
+    # Calculate Terminal Value using Gordon Growth Model
+    # Assumes perpetual growth at a stable rate beyond forecast period
+    last_fcf = forecasts[-1]  # Final year explicit forecast
+
+    # Gordon Growth Formula: Terminal Value = FCFₙ₊₁ / (WACC - g)
+    # Where FCFₙ₊₁ = FCFₙ * (1 + g)
+    terminal_value = last_fcf * (1 + terminal_growth) / (wacc - terminal_growth)
+
+    # Discount Terminal Value to present value
+    pv_terminal = terminal_value / ((1 + wacc) ** len(forecasts))
+
+    # Calculate Enterprise Value (value of entire business)
+    enterprise_value = pv_fcf + pv_terminal
+
+    # Calculate Equity Value (enterprise value minus net debt)
+    equity_value = enterprise_value - net_debt
+
+    # Calculate fair value per share
+    price_per_share = equity_value / shares_outstanding if shares_outstanding > 0 else 0.0
+
+    return {
+        'enterprise_value': enterprise_value,
+        'equity_value': equity_value,
+        'price_per_share': price_per_share,
+        'pv_fcf': pv_fcf,
+        'pv_terminal': pv_terminal
+    }
