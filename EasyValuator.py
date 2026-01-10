@@ -786,3 +786,84 @@ def price_stock(ticker_symbol: str, forecast_years: int = 5) -> dict:
         'wacc': wacc,
         'cagr': cagr
     }
+
+# -----------------------
+# Command Line Interface
+# -----------------------
+
+if __name__ == "__main__":
+    """
+    Command-line entry point for DCF valuation tool.
+
+    Supports multiple input methods:
+    1. Hard-coded ticker in source code (for rapid testing)
+    2. Command-line argument (for script usage)  
+    3. Interactive input (for ad-hoc analysis)
+
+    Provides robust error handling and debugging support for production use.
+    """
+
+    # =========================================================================
+    # OPTION 1: Hard-coded ticker (for rapid testing and development)
+    # =========================================================================
+    # Uncomment the line below and set your desired ticker for quick testing
+    # ticker = "AAPL"  # Example: Apple Inc.
+    # =========================================================================
+
+    # =========================================================================
+    # OPTION 2: Command-line argument (for script usage and automation)
+    # =========================================================================
+    # Usage: python script.py AAPL
+    #        python script.py MSFT
+    # if len(sys.argv) > 1:
+    #     ticker = sys.argv[1]
+    #     print(f"Using ticker from command line: {ticker}")
+
+    # =========================================================================
+    # OPTION 3: Interactive input (for ad-hoc analysis and user-friendly operation)
+    # =========================================================================
+    # else:
+    #     # Check if ticker is not already set via hard-coded option
+    #     if 'ticker' not in locals():
+    #         ticker = input("Enter stock ticker: ").strip()
+    #
+    # # Validate ticker input
+    # if not ticker or not ticker.strip():
+    #     print("Error: No ticker symbol provided.")
+    #     print("Please either:")
+    #     print("  1. Set a ticker in the code (see OPTION 1 section)")
+    #     print("  2. Provide a ticker as command-line argument: python script.py AAPL")
+    #     print("  3. Enter a ticker when prompted")
+    #     sys.exit(1)
+
+    # try:
+    #     # Execute valuation analysis
+    #     print(f"Starting DCF analysis for ticker: {ticker}")
+    #     result = price_stock(ticker)
+    #
+    #     # Optional: Add success message or additional processing
+    #     print(f"\nAnalysis completed successfully for {ticker}")
+    #
+    # except KeyboardInterrupt:
+    #     print(f"\nAnalysis interrupted by user for {ticker}")
+    #     sys.exit(1)
+    # except Exception as e:
+    #     # Comprehensive error handling with debugging support
+    #     print(f"\nError analyzing {ticker}: {e}")
+    #     print("\nCommon issues:")
+    #     print("  - Invalid ticker symbol")
+    #     print("  - No data available for the ticker")
+    #     print("  - Network connectivity issues")
+    #     print("  - Insufficient financial data for analysis")
+    #
+    #     import traceback
+    #
+    #     traceback.print_exc()
+    #     sys.exit(1)
+
+    # dict = [
+    #     "SIE.DE",
+    #     "WMT"
+    # ]
+    # for i in dict:
+    #     price_stock(i)
