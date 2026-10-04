@@ -57,6 +57,7 @@ def render_text(result: ValuationResult) -> str:
     for period, value in result.historical_fcf.items():
         label = str(period.year) if hasattr(period, "year") else str(period)
         lines.append(_row(f"{label} (actual)", _money(value, cur)))
+    lines.append(_row("Forecast base (normalized)", _money(result.base_fcf, cur)))
     for year, value in enumerate(result.forecast_fcf, start=1):
         lines.append(_row(f"Year {year} (forecast)", _money(value, cur)))
     lines.append(_row("Historical CAGR (clamped)", _pct(result.cagr)))
@@ -111,5 +112,10 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def render_json(result: ValuationResult, *, indent: int | None = 2) -> str:
-    return json.dumps(result.to_dict(), indent=indent, default=_json_default)
+def render_json(results: ValuationResult | list[ValuationResult], *, indent: int | None = 2) -> str:
+    """JSON for one result (an object) or several (an array)."""
+    if isinstance(results, ValuationResult):
+        payload: Any = results.to_dict()
+    else:
+        payload = [result.to_dict() for result in results]
+    return json.dumps(payload, indent=indent, default=_json_default)

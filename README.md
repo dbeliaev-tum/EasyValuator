@@ -23,28 +23,29 @@ DCF valuation: Apple Inc. (AAPL)
 Cost of capital
 ----------------------------------------------------------------
   Risk-free rate                                           5.28%
-  Equity risk premium                                      5.50%
+  Equity risk premium                                      4.50%
   Beta                                                      1.08
-  Cost of equity                                          11.24%
+  Cost of equity                                          10.16%
   Cost of debt (pre-tax)                                   4.66%
   Tax rate                                                15.60%
   Weights (equity / debt)                           98.3% / 1.7%
-  WACC                                                    11.12%
+  WACC                                                    10.05%
 ...
 ================================================================
-  FAIR VALUE PER SHARE                                 69.98 USD
+  FAIR VALUE PER SHARE                                 77.12 USD
   CURRENT PRICE                                       333.69 USD
-  UPSIDE / DOWNSIDE                                       -79.0%
+  UPSIDE / DOWNSIDE                                       -76.9%
 ================================================================
 
 Sensitivity: fair value per share
 ----------------------------------------------------------------
   WACC \ g       1.50%     2.00%     2.50%     3.00%     3.50%
-     9.12%       81.97     86.35     91.39     97.25    104.16
-    10.12%       72.31     75.58     79.28     83.50     88.36
- *  11.12%       64.65     67.17     69.98     73.14     76.71
-    12.12%       58.44     60.42     62.61     65.04     67.75
-    13.12%       53.30     54.89     56.63     58.55     60.66
+     8.05%       90.22     96.22    103.28    111.72    122.00
+     9.05%       78.82     83.19     88.21     94.06    100.94
+ *  10.05%       70.07     73.38     77.12     81.38     86.28
+    11.05%       63.14     65.72     68.60     71.83     75.48
+    12.05%       57.51     59.58     61.86     64.38     67.19
+  (fair value per share, USD; * = base case WACC)
 ```
 
 ## Features
@@ -86,7 +87,7 @@ python -m easyvaluator --help
 | Option | Meaning |
 |---|---|
 | `-c, --currency` | Reporting currency (ISO code, default `EUR`) |
-| `-y, --years` | Explicit forecast horizon (default `5`) |
+| `-y, --years` | Explicit forecast horizon (default `10`) |
 | `-g, --terminal-growth` | Perpetual growth rate in percent (default `2.5`) |
 | `--tax-rate` | Override the company's effective tax rate, in percent |
 | `--no-sensitivity` | Skip the sensitivity grid |
@@ -121,7 +122,7 @@ result = Valuator(provider=my_provider).value_snapshot(my_snapshot)
 ## Methodology
 
 ```
-Enterprise value  = Σ FCFₜ / (1 + WACC)ᵗ  +  TV / (1 + WACC)ⁿ
+Enterprise value  = Σ FCFₜ / (1 + WACC)ᵗ⁻⁰·⁵  +  TV / (1 + WACC)ⁿ⁻⁰·⁵   (mid-year convention)
 Terminal value TV = FCFₙ × (1 + g) / (WACC − g)
 Equity value      = Enterprise value − (Total debt − Cash)
 Fair value/share  = Equity value / Shares outstanding
@@ -130,23 +131,26 @@ Fair value/share  = Equity value / Shares outstanding
 | Step | Approach |
 |---|---|
 | **Free cash flow** | Yahoo's `Free Cash Flow` line, else `Operating Cash Flow + CapEx` (CapEx is reported negative) |
+| **Starting point** | Average FCF of the last 3 years, so one unusual year (working capital, one-off tax or capex) doesn't scale the whole valuation. A non-positive average is rejected. |
 | **Growth** | CAGR over the *actual elapsed time* between the first and last statement, clamped to `[-5%, 15%]`. It is undefined when either endpoint is ≤ 0, and then falls back to `g`. |
-| **Forecast** | Growth decays linearly from the CAGR to `g`. The final forecast year grows at exactly `g`, so the forecast hands over smoothly to the perpetuity. |
-| **Cost of equity** | CAPM: `r_f + β × ERP`, with β clamped to `[0.5, 2.0]` |
+| **Forecast** | 10 years. Growth decays linearly from the CAGR to `g`. The final forecast year grows at exactly `g`, so the forecast hands over smoothly to the perpetuity. |
+| **Cost of equity** | CAPM: `r_f + β × ERP`, with β clamped to `[0.5, 2.0]`. ERP = 4.5% mature-market implied premium + a country premium. |
+| **Discounting** | Mid-year convention: cash arrives through the year, not on 31 December. Switch it off with `mid_year_convention=False`. |
 | **Cost of debt** | Interest expense ÷ total debt, clamped to `[1%, 15%]`. Falls back to 5%. |
 | **Tax rate** | The company's reported effective rate (latest year). Falls back to 21%. |
 | **WACC** | Weights based on market values, with both sides in the same currency. Clamped to `[6%, 20%]`. |
 
 The base WACC is always above `g`, because the `Assumptions` constructor rejects
-any `g ≥ wacc_min`. A company whose latest FCF is negative is rejected with
-an explicit error, since an FCF-based DCF is not meaningful for it.
+any `g ≥ wacc_min`. The sensitivity grid rebuilds the forecast for every `g`,
+so each cell is internally consistent: the last forecast year grows at the same
+rate as the perpetuity.
 
 ### Regional parameters
 
 | Currency | Risk-free rate | | Region | Equity risk premium |
 |---|---|---|---|---|
-| USD, HKD | US 10Y (`^TNX`) | | US, EU, UK, JP | 5.5% |
-| EUR | US 10Y − 1.5% | | CN (incl. HK) | 7.0% |
+| USD, HKD | US 10Y (`^TNX`) | | US, EU, UK, JP | 4.5% |
+| EUR | US 10Y − 1.5% | | CN (incl. HK) | 5.5% |
 | GBP | US 10Y − 0.5% | | | |
 | JPY | US 10Y − 2.5% | | | |
 | CNY | US 10Y − 2.0% | | | |
@@ -218,9 +222,14 @@ and the pence-quoting bug.
 - Equity risk premiums are static long-run estimates.
 - Historical FCF is converted at today's spot rate, so it is a presentation
   aid rather than the FX history.
-- A single DCF on trailing FCF undervalues companies whose cash flow is
-  temporarily depressed. It also undervalues companies whose value rests on
-  growth beyond the forecast window. Use the sensitivity table.
+- Growth is extrapolated from historical FCF only. The model will look
+  pessimistic on companies that the market prices on future growth. For
+  example, AAPL trades at a ~2% FCF yield, while a ~10% WACC minus 2.5%
+  growth requires ~7.5%. Even 15% annual growth for ten years leaves the
+  model well below the price. That isn't a bug: it's what a DCF says about
+  these inputs. Read the sensitivity table, not just the point estimate.
+- Conglomerates with captive finance arms (e.g. Toyota) report negative
+  consolidated FCF and are rejected.
 - Financial companies (banks, insurers) need a different model and are not a good fit.
 
 ## Roadmap

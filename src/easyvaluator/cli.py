@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from collections.abc import Sequence
@@ -12,6 +11,7 @@ from . import __version__
 from .assumptions import DEFAULT_ASSUMPTIONS, Assumptions
 from .exceptions import EasyValuatorError
 from .market_data import MarketDataProvider
+from .models import ValuationResult
 from .report import render_json, render_text
 from .valuation import Valuator
 
@@ -82,7 +82,7 @@ def main(argv: Sequence[str] | None = None, provider: MarketDataProvider | None 
 
     valuator = Valuator(provider, assumptions)
     exit_code = EXIT_OK
-    json_results = []
+    results: list[ValuationResult] = []
 
     for ticker in args.tickers:
         try:
@@ -93,13 +93,13 @@ def main(argv: Sequence[str] | None = None, provider: MarketDataProvider | None 
             continue
 
         if args.json:
-            json_results.append(json.loads(render_json(result)))
+            results.append(result)
         else:
             print(render_text(result), end="\n\n")
 
     if args.json:
-        payload = json_results[0] if len(args.tickers) == 1 and json_results else json_results
-        print(json.dumps(payload, indent=2))
+        # A single ticker yields an object, several yield an array.
+        print(render_json(results[0] if len(args.tickers) == 1 and results else results))
 
     return exit_code
 

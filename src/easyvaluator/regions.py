@@ -14,13 +14,23 @@ from dataclasses import dataclass
 
 DEFAULT_REGION = "US"
 
-# Long-term equity risk premiums by region (Damodaran-style estimates).
+# Implied equity risk premium for a mature market, in line with
+# Damodaran's forward-looking estimates for the S&P 500 (~4-4.5% in recent
+# years). Historical-average premiums (5.5%+) stacked on today's higher
+# risk-free rates double-count risk and push mega-cap WACCs above 10%.
+MATURE_MARKET_ERP = 0.045
+
+# Additional country risk premium on top of the mature-market ERP.
+COUNTRY_RISK_PREMIUMS: dict[str, float] = {
+    "US": 0.0,
+    "EU": 0.0,
+    "UK": 0.0,
+    "JP": 0.0,
+    "CN": 0.010,
+}
+
 EQUITY_RISK_PREMIUMS: dict[str, float] = {
-    "US": 0.055,
-    "EU": 0.055,
-    "UK": 0.055,
-    "CN": 0.070,
-    "JP": 0.055,
+    region: MATURE_MARKET_ERP + premium for region, premium in COUNTRY_RISK_PREMIUMS.items()
 }
 
 # 10Y government yield spread vs. the US Treasury, by currency.

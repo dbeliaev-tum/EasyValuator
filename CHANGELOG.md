@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Changed (model)
+- Forecast horizon defaults to 10 years (was 5).
+- The forecast starts from the 3-year average FCF instead of the latest year.
+  Average ≤ 0 is rejected; a negative latest year alone is smoothed and flagged.
+- Mid-year discounting convention, on by default (`mid_year_convention`).
+- Equity risk premium: 4.5% mature-market implied premium + country premium
+  (CN +1%), replacing the 5.5% / 7.0% historical-style figures.
+
+### Fixed
+- The sensitivity grid now rebuilds the forecast for each terminal growth rate. Before, only the
+  perpetuity used the cell's `g` while the last forecast year still grew at the base `g`.
+- `CompanySnapshot` copies its FCF series and rejects a non-positive price or share count.
+  `eq=False` on Series-holding dataclasses, where the generated `==` raised.
+
+### Internal
+- `Valuator.value_snapshot` split into region / projection / cost-of-capital steps.
+- The CLI's JSON output no longer round-trips through `json.loads`. `render_json` accepts a list.
+- Removed the unneeded `tests/__init__.py`.
+
 ## 2.0.0
 
 ### Fixed

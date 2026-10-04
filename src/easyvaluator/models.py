@@ -13,8 +13,10 @@ from typing import Any
 
 import pandas as pd
 
+from .exceptions import DataUnavailableError
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, eq=False)
 class CompanySnapshot:
     """Everything the model needs to know about a company, at one point in time.
 
@@ -24,6 +26,11 @@ class CompanySnapshot:
       * `total_debt`, `total_cash`, `interest_expense` and `historical_fcf`
         are in `financial_currency`, the currency of the statements.
     The two differ for ADRs and some cross-listings (e.g. TSM: USD / TWD).
+
+    `frozen` only stops attribute reassignment; the FCF series is copied on
+    construction so later changes to the caller's series can't leak in.
+    `eq=False` because dataclass equality on a `pd.Series` field raises
+    instead of returning a bool.
     """
 
     symbol: str
@@ -45,6 +52,16 @@ class CompanySnapshot:
     beta: float | None = None
     interest_expense: float | None = None
     effective_tax_rate: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.price > 0:
+            raise DataUnavailableError(f"{self.symbol}: price must be positive, got {self.price}")
+        if not self.shares_outstanding > 0:
+            raise DataUnavailableError(
+                f"{self.symbol}: shares outstanding must be positive, got {self.shares_outstanding}"
+            )
+        fcf = self.historical_fcf.astype(float).sort_index()
+        object.__setattr__(self, "historical_fcf", fcf)
 
 
 @dataclass(frozen=True)
@@ -95,7 +112,7 @@ class SensitivityTable:
         return frame
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ValuationResult:
     """Full output of a valuation. Monetary fields are in `target_currency`
     unless their name says otherwise.
@@ -110,6 +127,7 @@ class ValuationResult:
 
     current_price: float
     historical_fcf: pd.Series
+    base_fcf: float  # normalized starting point of the forecast
     forecast_fcf: list[float]
     cagr: float
 

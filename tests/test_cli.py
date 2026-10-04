@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from easyvaluator import Valuator, render_text
+from easyvaluator import Valuator, render_json, render_text
 from easyvaluator.cli import main
 
 
@@ -55,3 +55,9 @@ def test_render_text_lists_warnings(populated, make_snapshot):
     text = render_text(Valuator(populated).value("TEST"))
     assert "Model warnings" in text
     assert "Beta unavailable" in text
+
+
+def test_render_json_object_vs_array(populated):
+    result = Valuator(populated).value("TEST", sensitivity=False)
+    assert json.loads(render_json(result))["symbol"] == "TEST"
+    assert [r["symbol"] for r in json.loads(render_json([result, result]))] == ["TEST", "TEST"]

@@ -16,7 +16,20 @@ class Assumptions:
     """Every tunable number in the model, validated on construction."""
 
     target_currency: str = "EUR"
-    forecast_years: int = 5
+
+    # A ten-year horizon lets above-trend growth fade gradually. With five
+    # years, a compounder's growth is cut to `terminal_growth` almost at once
+    # and most of its value lands in a terminal value that ignores it.
+    forecast_years: int = 10
+
+    # The forecast starts from the average FCF of the last N years rather
+    # than the latest one, so a single weak or strong year (working-capital
+    # swings, one-off capex) doesn't scale the whole valuation.
+    base_fcf_years: int = 3
+
+    # Discount each year's cash flow from mid-year (t - 0.5) rather than
+    # year-end: cash arrives throughout the year, not on December 31st.
+    mid_year_convention: bool = True
 
     # Long-term perpetual growth rate. Used both as the endpoint of the FCF
     # growth-decay model and as "g" in the Gordon Growth terminal value, so
@@ -50,6 +63,8 @@ class Assumptions:
             raise InvalidAssumptionError(f"target_currency must be an ISO 4217 code, got {self.target_currency!r}")
         if not 1 <= self.forecast_years <= 30:
             raise InvalidAssumptionError(f"forecast_years must be in [1, 30], got {self.forecast_years}")
+        if self.base_fcf_years < 1:
+            raise InvalidAssumptionError(f"base_fcf_years must be at least 1, got {self.base_fcf_years}")
         if self.tax_rate is not None and not 0 <= self.tax_rate < 1:
             raise InvalidAssumptionError(f"tax_rate must be in [0, 1), got {self.tax_rate}")
         if not 0 <= self.default_tax_rate < 1:

@@ -42,18 +42,47 @@ def test_invalid_inputs_raise(kwargs):
         discount_cash_flows(**{**args, **kwargs})
 
 
+def test_mid_year_convention_shifts_every_cash_flow_half_a_year():
+    forecasts = [100.0, 110.0]
+    end = discount_cash_flows(forecasts, 0.10, 0.02, 1.0, 0.0)
+    mid = discount_cash_flows(forecasts, 0.10, 0.02, 1.0, 0.0, mid_year=True)
+
+    assert mid.pv_forecast == pytest.approx(end.pv_forecast * 1.10**0.5)
+    assert mid.pv_terminal == pytest.approx(end.pv_terminal * 1.10**0.5)
+    assert mid.terminal_value == pytest.approx(end.terminal_value)  # undiscounted TV is unchanged
+
+
+def _constant(forecasts):
+    return lambda g: forecasts
+
+
 def test_sensitivity_centre_equals_base_case():
     forecasts = [100.0, 105.0, 110.0]
-    base = discount_cash_flows(forecasts, 0.09, 0.025, 10.0, 50.0)
-    table = sensitivity_table(forecasts, 0.09, 0.025, 10.0, 50.0, steps=2)
+    base = discount_cash_flows(forecasts, 0.09, 0.025, 10.0, 50.0, mid_year=True)
+    table = sensitivity_table(_constant(forecasts), 0.09, 0.025, 10.0, 50.0, mid_year=True, steps=2)
 
     assert len(table.values) == 5
     assert all(len(row) == 5 for row in table.values)
     assert table.values[2][2] == pytest.approx(base.value_per_share)
 
 
+def test_sensitivity_rebuilds_forecast_for_each_growth_rate():
+    """Each column's forecast must end at that column's g, like the base case."""
+    requested = []
+
+    def forecast_for(g):
+        requested.append(g)
+        return [100.0 * (1 + g)]
+
+    table = sensitivity_table(forecast_for, 0.09, 0.02, 1.0, 0.0)
+
+    assert sorted(requested) == pytest.approx(table.growth_values)
+    expected = discount_cash_flows([100.0 * 1.03], 0.09, 0.03, 1.0, 0.0).value_per_share
+    assert table.values[2][4] == pytest.approx(expected)
+
+
 def test_sensitivity_is_monotonic():
-    table = sensitivity_table([100.0, 105.0], 0.09, 0.02, 10.0, 0.0)
+    table = sensitivity_table(lambda g: [100.0, 100.0 * (1 + g)], 0.09, 0.02, 10.0, 0.0)
     centre_row = table.values[2]
     centre_col = [row[2] for row in table.values]
     assert centre_row == sorted(centre_row)  # higher g -> higher value
@@ -61,12 +90,14 @@ def test_sensitivity_is_monotonic():
 
 
 def test_sensitivity_marks_undefined_cells():
-    table = sensitivity_table([100.0], wacc=0.03, terminal_growth=0.025, shares_outstanding=1.0, net_debt=0.0)
+    table = sensitivity_table(
+        _constant([100.0]), wacc=0.03, terminal_growth=0.025, shares_outstanding=1.0, net_debt=0.0
+    )
     assert table.values[0][-1] is None  # WACC 1% vs g 3.5%
 
 
 def test_sensitivity_scale_is_applied():
-    plain = sensitivity_table([100.0], 0.09, 0.02, 1.0, 0.0)
-    scaled = sensitivity_table([100.0], 0.09, 0.02, 1.0, 0.0, scale=0.5)
+    plain = sensitivity_table(_constant([100.0]), 0.09, 0.02, 1.0, 0.0)
+    scaled = sensitivity_table(_constant([100.0]), 0.09, 0.02, 1.0, 0.0, scale=0.5)
     assert scaled.values[2][2] == pytest.approx(plain.values[2][2] * 0.5)
     assert scaled.to_frame().shape == (5, 5)

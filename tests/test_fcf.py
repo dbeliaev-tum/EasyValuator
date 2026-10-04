@@ -3,7 +3,7 @@ import pytest
 
 from easyvaluator.assumptions import Assumptions
 from easyvaluator.exceptions import ValuationError
-from easyvaluator.fcf import estimate_growth, forecast_fcf, growth_path
+from easyvaluator.fcf import estimate_growth, forecast_fcf, growth_path, normalized_base_fcf
 
 
 def test_cagr_from_endpoints(fcf_series):
@@ -52,3 +52,15 @@ def test_growth_path_single_year_is_terminal():
 
 def test_forecast_compounds():
     assert forecast_fcf(100.0, [0.10, 0.05]) == pytest.approx([110.0, 115.5])
+
+
+def test_normalized_base_fcf_averages_recent_years(fcf_series):
+    series = fcf_series(10.0, 100.0, 130.0, 70.0)
+    assert normalized_base_fcf(series, 3) == pytest.approx(100.0)
+    assert normalized_base_fcf(series, 1) == pytest.approx(70.0)
+    assert normalized_base_fcf(series, 10) == pytest.approx(77.5)  # window longer than history
+
+
+def test_normalized_base_fcf_requires_data(fcf_series):
+    with pytest.raises(ValuationError):
+        normalized_base_fcf(fcf_series(), 3)

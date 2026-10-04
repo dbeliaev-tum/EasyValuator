@@ -58,6 +58,17 @@ def estimate_growth(historical_fcf: pd.Series, assumptions: Assumptions = DEFAUL
     return GrowthEstimate(cagr=clamped, raw_cagr=raw, note=note)
 
 
+def normalized_base_fcf(historical_fcf: pd.Series, years: int) -> float:
+    """Average FCF over the most recent `years` observations.
+
+    Smooths out one-off swings in the starting point of the forecast; with
+    `years=1` this is just the latest value.
+    """
+    if historical_fcf.empty:
+        raise ValuationError("No historical FCF to base the forecast on")
+    return float(historical_fcf.iloc[-years:].mean())
+
+
 def growth_path(cagr: float, terminal_growth: float, years: int) -> list[float]:
     """Annual growth rates decaying linearly from `cagr` to `terminal_growth`.
 

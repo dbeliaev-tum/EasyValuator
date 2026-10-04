@@ -11,17 +11,16 @@ doesn't depend on the order of operations.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from . import regions
 from .assumptions import DEFAULT_ASSUMPTIONS, Assumptions
 from .dcf import discount_cash_flows, sensitivity_table
 from .exceptions import ValuationError
-from .fcf import estimate_growth, forecast_fcf, growth_path
+from .fcf import estimate_growth, forecast_fcf, growth_path, normalized_base_fcf
 from .fx import FXConverter
 from .market_data import MarketDataProvider, YahooFinanceProvider
-from .models import CompanySnapshot, DCFBreakdown, ValuationResult
+from .models import CompanySnapshot, DCFBreakdown, ValuationResult, WACCBreakdown
 from .wacc import calculate_wacc
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,30 @@ logger = logging.getLogger(__name__)
 TERMINAL_VALUE_WARNING_SHARE = 0.80
 
 MAX_PLAUSIBLE_TAX_RATE = 0.50
+
+
+class _WarningLog:
+    """Collects model warnings for the result and mirrors them to the log."""
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+        self.messages: list[str] = []
+
+    def __call__(self, message: str) -> None:
+        logger.warning("%s: %s", self.symbol, message)
+        self.messages.append(message)
+
+
+@dataclass(frozen=True)
+class _Projection:
+    """FCF starting point and growth, in the statement currency."""
+
+    base_fcf: float
+    cagr: float
+    years: int
+
+    def forecast(self, terminal_growth: float) -> list[float]:
+        return forecast_fcf(self.base_fcf, growth_path(self.cagr, terminal_growth, self.years))
 
 
 class Valuator:
@@ -55,36 +78,96 @@ class Valuator:
 
     def value_snapshot(self, company: CompanySnapshot, *, sensitivity: bool = True) -> ValuationResult:
         a = self.assumptions
-        warnings: list[str] = []
+        warn = _WarningLog(company.symbol)
 
-        def warn(message: str) -> None:
-            logger.warning("%s: %s", company.symbol, message)
-            warnings.append(message)
+        region = self._region(company, warn)
+        projection = self._project(company, warn)
+        wacc = self._cost_of_capital(company, region, warn)
 
-        fin_ccy = company.financial_currency
+        net_debt = company.total_debt - company.total_cash
+        forecasts = projection.forecast(a.terminal_growth)
+        dcf = discount_cash_flows(
+            forecasts,
+            wacc.wacc,
+            a.terminal_growth,
+            company.shares_outstanding,
+            net_debt,
+            mid_year=a.mid_year_convention,
+        )
+        if dcf.terminal_value_share > TERMINAL_VALUE_WARNING_SHARE:
+            warn(f"Terminal value is {dcf.terminal_value_share:.0%} of enterprise value")
+        if dcf.equity_value <= 0:
+            warn("Net debt exceeds enterprise value; equity value is not positive")
 
+        to_target = self.fx.rate(company.financial_currency, a.target_currency)
+        table = None
+        if sensitivity:
+            table = sensitivity_table(
+                projection.forecast,
+                wacc.wacc,
+                a.terminal_growth,
+                company.shares_outstanding,
+                net_debt,
+                mid_year=a.mid_year_convention,
+                scale=to_target,
+            )
+
+        return ValuationResult(
+            symbol=company.symbol,
+            company_name=company.name,
+            region=region,
+            price_currency=company.price_currency,
+            financial_currency=company.financial_currency,
+            target_currency=a.target_currency,
+            current_price=self.fx.convert(company.price, company.price_currency, a.target_currency),
+            historical_fcf=company.historical_fcf * to_target,
+            base_fcf=projection.base_fcf * to_target,
+            forecast_fcf=[value * to_target for value in forecasts],
+            cagr=projection.cagr,
+            wacc=wacc,
+            dcf=_scale(dcf, to_target),
+            terminal_growth=a.terminal_growth,
+            shares_outstanding=company.shares_outstanding,
+            total_debt=company.total_debt * to_target,
+            total_cash=company.total_cash * to_target,
+            sensitivity=table,
+            warnings=warn.messages,
+        )
+
+    # --- Pipeline steps ---------------------------------------------------
+
+    def _region(self, company: CompanySnapshot, warn: _WarningLog) -> str:
         region = regions.classify_region(company.symbol, company.country)
         if region is None:
             warn(f"Region for country {company.country!r} not modelled; using US equity risk premium")
-            region = regions.DEFAULT_REGION
+            return regions.DEFAULT_REGION
+        return region
 
-        # --- Free cash flow -------------------------------------------------
+    def _project(self, company: CompanySnapshot, warn: _WarningLog) -> _Projection:
+        a = self.assumptions
         historical = company.historical_fcf
         if len(historical) < 2:
             raise ValuationError("At least 2 years of historical FCF are required")
-        base_fcf = float(historical.iloc[-1])
+
+        window = min(a.base_fcf_years, len(historical))
+        base_fcf = normalized_base_fcf(historical, window)
         if base_fcf <= 0:
             raise ValuationError(
-                f"Latest free cash flow is negative ({base_fcf:,.0f} {fin_ccy}); "
-                "an FCF-based DCF is not meaningful for this company"
+                f"Average free cash flow over the last {window} years is not positive "
+                f"({base_fcf:,.0f} {company.financial_currency}); an FCF-based DCF is not meaningful"
             )
+        if historical.iloc[-1] <= 0:
+            warn("Latest free cash flow is negative; forecast is based on the multi-year average")
 
         growth = estimate_growth(historical, a)
         if growth.note:
             warn(growth.note)
-        forecasts = forecast_fcf(base_fcf, growth_path(growth.cagr, a.terminal_growth, a.forecast_years))
+        return _Projection(base_fcf=base_fcf, cagr=growth.cagr, years=a.forecast_years)
 
-        # --- Discount rate --------------------------------------------------
+    def _cost_of_capital(self, company: CompanySnapshot, region: str, warn: _WarningLog) -> WACCBreakdown:
+        a = self.assumptions
+        fin_ccy = company.financial_currency
+
         rf = regions.risk_free_rate(fin_ccy, self.provider.get_us_treasury_yield())
         if not rf.currency_supported:
             warn(f"No risk-free spread modelled for {fin_ccy}; discounting at the US rate")
@@ -104,7 +187,7 @@ class Valuator:
             warn(f"Cost of debt unavailable; assuming {a.fallback_cost_of_debt:.1%}")
             cost_of_debt = a.fallback_cost_of_debt
 
-        wacc = calculate_wacc(
+        return calculate_wacc(
             risk_free_rate=rf.rate,
             market_risk_premium=regions.equity_risk_premium(region),
             beta=beta,
@@ -117,44 +200,7 @@ class Valuator:
             assumptions=a,
         )
 
-        # --- Valuation ------------------------------------------------------
-        net_debt = company.total_debt - company.total_cash
-        dcf = discount_cash_flows(forecasts, wacc.wacc, a.terminal_growth, company.shares_outstanding, net_debt)
-        if dcf.terminal_value_share > TERMINAL_VALUE_WARNING_SHARE:
-            warn(f"Terminal value is {dcf.terminal_value_share:.0%} of enterprise value")
-        if dcf.equity_value <= 0:
-            warn("Net debt exceeds enterprise value; equity value is not positive")
-
-        # --- Convert outputs ------------------------------------------------
-        to_target = self.fx.rate(fin_ccy, a.target_currency)
-        table = None
-        if sensitivity:
-            table = sensitivity_table(
-                forecasts, wacc.wacc, a.terminal_growth, company.shares_outstanding, net_debt, scale=to_target
-            )
-
-        return ValuationResult(
-            symbol=company.symbol,
-            company_name=company.name,
-            region=region,
-            price_currency=company.price_currency,
-            financial_currency=fin_ccy,
-            target_currency=a.target_currency,
-            current_price=self.fx.convert(company.price, company.price_currency, a.target_currency),
-            historical_fcf=historical * to_target,
-            forecast_fcf=[value * to_target for value in forecasts],
-            cagr=growth.cagr,
-            wacc=wacc,
-            dcf=_scale(dcf, to_target),
-            terminal_growth=a.terminal_growth,
-            shares_outstanding=company.shares_outstanding,
-            total_debt=company.total_debt * to_target,
-            total_cash=company.total_cash * to_target,
-            sensitivity=table,
-            warnings=warnings,
-        )
-
-    def _tax_rate(self, company: CompanySnapshot, warn: Callable[[str], None]) -> float:
+    def _tax_rate(self, company: CompanySnapshot, warn: _WarningLog) -> float:
         if self.assumptions.tax_rate is not None:
             return self.assumptions.tax_rate
         reported = company.effective_tax_rate

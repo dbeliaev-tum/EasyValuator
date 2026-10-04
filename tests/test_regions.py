@@ -22,7 +22,8 @@ def test_classify_region(symbol, country, expected):
 
 
 def test_equity_risk_premium():
-    assert regions.equity_risk_premium("CN") == pytest.approx(0.070)
+    assert regions.equity_risk_premium("US") == pytest.approx(regions.MATURE_MARKET_ERP)
+    assert regions.equity_risk_premium("CN") == pytest.approx(regions.MATURE_MARKET_ERP + 0.01)
     assert regions.equity_risk_premium("BR") == regions.equity_risk_premium("US")
 
 

@@ -16,7 +16,9 @@ def test_full_pipeline_in_reporting_currency(provider, make_snapshot):
     assert result.target_currency == "EUR"
     assert result.current_price == pytest.approx(50.0 * 0.9)
     assert result.historical_fcf.iloc[-1] == pytest.approx(2_662_000 * 0.9)
-    assert len(result.forecast_fcf) == 5
+    assert len(result.forecast_fcf) == 10
+    # Forecast starts from the 3-year average, not the latest year.
+    assert result.base_fcf == pytest.approx((2_200_000 + 2_420_000 + 2_662_000) / 3 * 0.9)
     assert result.cagr == pytest.approx(0.10, rel=1e-2)
     assert result.wacc.tax_rate == pytest.approx(0.21)  # reported effective rate
     assert result.wacc.cost_of_debt == pytest.approx(0.05)  # 500k / 10M
@@ -98,10 +100,17 @@ def test_tax_rate_override(provider, make_snapshot):
     assert result.wacc.tax_rate == pytest.approx(0.3)
 
 
-def test_negative_latest_fcf_is_rejected(provider, make_snapshot, fcf_series):
-    provider.companies["TEST"] = make_snapshot(historical_fcf=fcf_series(100.0, -50.0))
-    with pytest.raises(ValuationError, match="negative"):
+def test_negative_average_fcf_is_rejected(provider, make_snapshot, fcf_series):
+    provider.companies["TEST"] = make_snapshot(historical_fcf=fcf_series(100.0, -80.0, -50.0))
+    with pytest.raises(ValuationError, match="not positive"):
         Valuator(provider).value("TEST")
+
+
+def test_one_negative_year_is_smoothed_and_flagged(provider, make_snapshot, fcf_series):
+    provider.companies["TEST"] = make_snapshot(historical_fcf=fcf_series(100.0, 120.0, 140.0, -20.0))
+    result = Valuator(provider, Assumptions(target_currency="USD")).value("TEST")
+    assert result.base_fcf == pytest.approx(80.0)
+    assert any("Latest free cash flow is negative" in w for w in result.warnings)
 
 
 def test_too_little_history_is_rejected(provider, make_snapshot, fcf_series):
@@ -130,6 +139,26 @@ def test_result_is_consistent_with_dcf_module(provider, make_snapshot):
     provider.companies["TEST"] = make_snapshot()
     result = Valuator(provider, Assumptions(target_currency="USD")).value("TEST")
     direct = discount_cash_flows(
-        result.forecast_fcf, result.wacc.wacc, result.terminal_growth, 1_000_000.0, 6_000_000.0
+        result.forecast_fcf, result.wacc.wacc, result.terminal_growth, 1_000_000.0, 6_000_000.0, mid_year=True
     )
     assert result.fair_value == pytest.approx(direct.value_per_share)
+
+
+def test_end_of_year_discounting_can_be_selected(provider, make_snapshot):
+    provider.companies["TEST"] = make_snapshot()
+    mid = Valuator(provider, Assumptions(target_currency="USD")).value("TEST")
+    end = Valuator(provider, Assumptions(target_currency="USD", mid_year_convention=False)).value("TEST")
+    assert mid.dcf.enterprise_value == pytest.approx(end.dcf.enterprise_value * (1 + mid.wacc.wacc) ** 0.5)
+
+
+@pytest.mark.parametrize("field", ["price", "shares_outstanding"])
+def test_snapshot_rejects_non_positive_essentials(make_snapshot, field):
+    with pytest.raises(DataUnavailableError):
+        make_snapshot(**{field: 0.0})
+
+
+def test_snapshot_is_isolated_from_caller_series(make_snapshot, fcf_series):
+    series = fcf_series(1.0, 2.0)
+    snapshot = make_snapshot(historical_fcf=series)
+    series.iloc[0] = 999.0
+    assert snapshot.historical_fcf.iloc[0] == 1.0
