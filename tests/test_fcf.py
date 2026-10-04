@@ -2,70 +2,53 @@ import pandas as pd
 import pytest
 
 from easyvaluator.assumptions import Assumptions
-from easyvaluator.fcf import forecast_fcf, get_historical_fcf
+from easyvaluator.exceptions import ValuationError
+from easyvaluator.fcf import estimate_growth, forecast_fcf, growth_path
 
 
-class FakeTicker:
-    """Minimal stand-in for yf.Ticker exposing only what get_historical_fcf needs."""
-
-    def __init__(self, cashflow: pd.DataFrame):
-        self.cashflow = cashflow
-
-
-def test_get_historical_fcf_prefers_direct_fcf_field():
-    cashflow = pd.DataFrame(
-        {"2023-12-31": [50.0], "2022-12-31": [40.0]},
-        index=["Free Cash Flow"],
-    )
-    fcf = get_historical_fcf(FakeTicker(cashflow))
-    assert list(fcf.values) == [40.0, 50.0]
+def test_cagr_from_endpoints(fcf_series):
+    growth = estimate_growth(fcf_series(100.0, 105.0, 110.25))
+    # Year-end dates two years apart; CAGR uses elapsed days, not point count.
+    assert growth.cagr == pytest.approx(0.05, rel=1e-3)
+    assert growth.note is None
 
 
-def test_get_historical_fcf_adds_negative_capex():
-    # yfinance reports CapEx as a negative cash outflow, so FCF = OpCash + CapEx.
-    cashflow = pd.DataFrame(
-        {"2023-12-31": [120.0, -20.0]},
-        index=["Operating Cash Flow", "Capital Expenditure"],
-    )
-    fcf = get_historical_fcf(FakeTicker(cashflow))
-    assert fcf.iloc[0] == pytest.approx(100.0)
+def test_cagr_uses_actual_dates_when_a_year_is_missing():
+    # 2019 -> 2023 with 2020-2022 missing: four years elapsed, not one.
+    series = pd.Series([100.0, 146.41], index=pd.to_datetime(["2019-12-31", "2023-12-31"]))
+    growth = estimate_growth(series, Assumptions(cagr_max=0.5))
+    assert growth.cagr == pytest.approx(0.10, rel=1e-3)
 
 
-def test_get_historical_fcf_raises_on_empty_cashflow():
-    with pytest.raises(ValueError):
-        get_historical_fcf(FakeTicker(pd.DataFrame()))
+def test_cagr_is_clamped_and_reported(fcf_series):
+    growth = estimate_growth(fcf_series(10.0, 100.0), Assumptions(cagr_max=0.15))
+    assert growth.cagr == pytest.approx(0.15)
+    assert growth.raw_cagr == pytest.approx(9.0, rel=1e-2)
+    assert "clamped" in growth.note
 
 
-def test_get_historical_fcf_raises_when_fields_missing():
-    cashflow = pd.DataFrame({"2023-12-31": [1.0]}, index=["Some Unrelated Field"])
-    with pytest.raises(ValueError):
-        get_historical_fcf(FakeTicker(cashflow))
+@pytest.mark.parametrize("values", [(-50.0, 100.0), (100.0, -50.0), (0.0, 100.0)])
+def test_cagr_undefined_for_non_positive_endpoints(fcf_series, values):
+    a = Assumptions(terminal_growth=0.02)
+    growth = estimate_growth(fcf_series(*values), a)
+    assert growth.cagr == a.terminal_growth
+    assert growth.raw_cagr is None
+    assert growth.note
 
 
-def test_forecast_fcf_decays_towards_terminal_growth():
-    historical = pd.Series([100.0, 110.0], index=pd.to_datetime(["2022-01-01", "2023-01-01"]))
-    assumptions = Assumptions(terminal_growth=0.02)
-
-    forecasts, cagr = forecast_fcf(historical, years=4, assumptions=assumptions)
-
-    assert cagr == pytest.approx(0.10, abs=1e-9)
-    assert len(forecasts) == 4
-
-    first_year_growth = forecasts[0] / 110.0 - 1
-    last_year_growth = forecasts[-1] / forecasts[-2] - 1
-    assert first_year_growth == pytest.approx(0.10 * 3 / 4 + 0.02 * 1 / 4)
-    assert last_year_growth == pytest.approx(0.02, abs=1e-9)
+def test_estimate_growth_requires_two_points(fcf_series):
+    with pytest.raises(ValuationError):
+        estimate_growth(fcf_series(100.0))
 
 
-def test_forecast_fcf_requires_two_years():
-    with pytest.raises(ValueError):
-        forecast_fcf(pd.Series([100.0]))
+def test_growth_path_decays_linearly_to_terminal():
+    rates = growth_path(cagr=0.10, terminal_growth=0.02, years=4)
+    assert rates == pytest.approx([0.08, 0.06, 0.04, 0.02])
 
 
-def test_forecast_fcf_clips_extreme_cagr():
-    historical = pd.Series([10.0, 100.0], index=pd.to_datetime(["2022-01-01", "2023-01-01"]))
-    assumptions = Assumptions(cagr_max=0.15)
+def test_growth_path_single_year_is_terminal():
+    assert growth_path(0.10, 0.02, 1) == pytest.approx([0.02])
 
-    _, cagr = forecast_fcf(historical, years=3, assumptions=assumptions)
 
-    assert cagr == pytest.approx(0.15)
+def test_forecast_compounds():
+    assert forecast_fcf(100.0, [0.10, 0.05]) == pytest.approx([110.0, 115.5])

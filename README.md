@@ -1,43 +1,74 @@
 # EasyValuator
 
-A Discounted Cash Flow (DCF) stock valuation tool. Given a ticker symbol, it
-pulls financials from Yahoo Finance, forecasts free cash flow, computes a
-region-aware WACC, and derives a fair value per share — with every figure
-normalized to a single output currency.
+[![CI](https://github.com/dbeliaev-tum/EasyValuator/actions/workflows/ci.yml/badge.svg)](https://github.com/dbeliaev-tum/EasyValuator/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)
+![Typed](https://img.shields.io/badge/typing-mypy%20strict-informational)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-This is a personal portfolio project combining software engineering and
-equity valuation. It is **not investment advice**: it relies on simplified
-assumptions (see below) and should be treated as an educational model, not
-a source of trading decisions.
+A Discounted Cash Flow (DCF) stock valuation engine. Given one or more ticker
+symbols, it pulls financial statements from Yahoo Finance, forecasts free cash
+flow, builds a CAPM-based WACC, and derives a fair value per share. It handles
+multiple currencies correctly, including ADRs and pence-quoted London listings,
+and it records every fallback it makes, so a result never quietly rests on a guess.
+
+> **Not investment advice.** This is an educational model with simplified
+> assumptions (see [Limitations](#limitations)).
+
+```console
+$ easyvaluator AAPL --currency USD
+================================================================
+DCF valuation: Apple Inc. (AAPL)
+================================================================
+...
+Cost of capital
+----------------------------------------------------------------
+  Risk-free rate                                           5.28%
+  Equity risk premium                                      5.50%
+  Beta                                                      1.08
+  Cost of equity                                          11.24%
+  Cost of debt (pre-tax)                                   4.66%
+  Tax rate                                                15.60%
+  Weights (equity / debt)                           98.3% / 1.7%
+  WACC                                                    11.12%
+...
+================================================================
+  FAIR VALUE PER SHARE                                 69.98 USD
+  CURRENT PRICE                                       333.69 USD
+  UPSIDE / DOWNSIDE                                       -79.0%
+================================================================
+
+Sensitivity: fair value per share
+----------------------------------------------------------------
+  WACC \ g       1.50%     2.00%     2.50%     3.00%     3.50%
+     9.12%       81.97     86.35     91.39     97.25    104.16
+    10.12%       72.31     75.58     79.28     83.50     88.36
+ *  11.12%       64.65     67.17     69.98     73.14     76.71
+    12.12%       58.44     60.42     62.61     65.04     67.75
+    13.12%       53.30     54.89     56.63     58.55     60.66
+```
 
 ## Features
 
-- Two-stage DCF: explicit forecast period + Gordon Growth terminal value
-- Multi-currency handling — market price and financial statements are
-  converted independently (they aren't always in the same currency, e.g.
-  for ADRs), both normalized to one target currency
-- Regional risk parameters (US, EU, UK, CN, JP): risk-free rate spread and
-  equity risk premium
-- CAPM-based WACC with market-implied capital structure weights and a debt
-  tax shield
-- Growth-decay FCF forecast: transitions from historical CAGR to the
-  assumed terminal growth rate
-- Configurable assumptions (forecast horizon, terminal growth, tax rate,
-  bounds on WACC/beta/CAGR) via a single `Assumptions` object
-- Unit-tested core valuation math (no network calls required)
+- **Two-stage DCF**: an explicit forecast period plus a Gordon Growth terminal value
+- **WACC × terminal-growth sensitivity table** for every valuation
+- **Currency-correct**:
+  - all math runs in the currency of the financial statements
+  - market cap is converted into that currency before computing capital weights
+  - only the final outputs are converted to the reporting currency
+  - minor-unit quotes (`GBp`, `ZAc`, `ILA`) are normalized
+- **Region-aware discount rates**: the risk-free rate is keyed by the *cash-flow currency*, and the equity risk premium by the *company's domicile*
+- **Data-driven inputs where available**: effective tax rate, cost of debt from interest expense, and market beta. Each has a documented fallback.
+- **Transparent**: every clamp or fallback is listed under *Model warnings* in the report and in the JSON
+- **Library, CLI and JSON output**, with a pluggable data provider
+- **Engineering**: strict type checking with mypy, 90%+ test coverage that runs fully offline, lint and format checks with ruff, and CI on Python 3.10–3.13
 
 ## Installation
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/dbeliaev-tum/EasyValuator.git
 cd EasyValuator
-pip install -r requirements.txt
-```
-
-Or install as an editable package (adds the `easyvaluator` command):
-
-```bash
-pip install -e .
+pip install -e .            # adds the `easyvaluator` command
+pip install -e ".[dev]"     # + pytest, ruff, mypy
 ```
 
 ## Usage
@@ -45,123 +76,163 @@ pip install -e .
 ### Command line
 
 ```bash
-python -m easyvaluator AAPL
-python -m easyvaluator MSFT --years 7 --currency USD
-python -m easyvaluator SIE.DE -v   # -v surfaces fallback warnings
+easyvaluator AAPL                          # report in EUR (default)
+easyvaluator AAPL MSFT SAP.DE -c USD       # several tickers, USD output
+easyvaluator 7203.T -y 7 -g 2 --tax-rate 30
+easyvaluator SHEL.L --json > shell.json    # machine-readable output
+python -m easyvaluator --help
 ```
 
-If no ticker is given, you'll be prompted for one interactively.
+| Option | Meaning |
+|---|---|
+| `-c, --currency` | Reporting currency (ISO code, default `EUR`) |
+| `-y, --years` | Explicit forecast horizon (default `5`) |
+| `-g, --terminal-growth` | Perpetual growth rate in percent (default `2.5`) |
+| `--tax-rate` | Override the company's effective tax rate, in percent |
+| `--no-sensitivity` | Skip the sensitivity grid |
+| `--json` | Emit JSON instead of the text report |
+| `-v, --verbose` | Log fallbacks as they happen |
+
+The exit code is `1` if any ticker failed. Invalid assumptions exit with `2`.
 
 ### As a library
 
 ```python
-from easyvaluator import Assumptions, price_stock, print_report
+from easyvaluator import Assumptions, Valuator, render_text
 
-result = price_stock("AAPL", Assumptions(target_currency="EUR", forecast_years=5))
-print_report(result)
+valuator = Valuator(assumptions=Assumptions(target_currency="USD", forecast_years=7))
+result = valuator.value("MSFT")
 
-print(result.fair_price, result.wacc, result.cagr)
+print(result.fair_value, result.upside)  # per-share value, upside vs. price
+print(result.wacc.cost_of_equity)  # full WACC breakdown
+print(result.sensitivity.to_frame())  # pandas DataFrame
+print(result.warnings)  # every fallback the model made
+print(render_text(result))
 ```
 
-`price_stock` returns a `ValuationResult` dataclass with every intermediate
-figure (historical/forecast FCF, WACC, beta, risk-free rate, enterprise and
-equity value, fair price...); `print_report` is purely a formatter on top
-of it, so the valuation logic has no I/O and is easy to test or feed into
-other tooling.
+The data source is injected through the `MarketDataProvider` protocol. That
+makes it possible to plug in another vendor, or to value a hand-built
+`CompanySnapshot` directly:
+
+```python
+result = Valuator(provider=my_provider).value_snapshot(my_snapshot)
+```
 
 ## Methodology
 
 ```
-Enterprise Value = PV(Explicit Forecast FCF) + PV(Terminal Value)
-Equity Value      = Enterprise Value - Net Debt
-Fair Value/Share  = Equity Value / Shares Outstanding
+Enterprise value  = Σ FCFₜ / (1 + WACC)ᵗ  +  TV / (1 + WACC)ⁿ
+Terminal value TV = FCFₙ × (1 + g) / (WACC − g)
+Equity value      = Enterprise value − (Total debt − Cash)
+Fair value/share  = Equity value / Shares outstanding
 ```
 
-- **Free Cash Flow**: read directly from Yahoo Finance's `Free Cash Flow`
-  line item when available; otherwise `Operating Cash Flow + Capital
-  Expenditure` (Yahoo reports CapEx as a negative outflow, so it is added,
-  not subtracted).
-- **FCF forecast**: growth rate decays linearly from the historical CAGR
-  (clamped to `[cagr_min, cagr_max]`) to `terminal_growth` over the
-  forecast horizon.
-- **Terminal value**: Gordon Growth Model, `FCF_n × (1 + g) / (WACC - g)`,
-  using the *same* `g` as the forecast decay endpoint — so the explicit
-  forecast and the perpetuity are consistent with each other.
-- **Cost of equity (CAPM)**: `risk_free_rate + beta × market_risk_premium`,
-  beta clamped to `[beta_min, beta_max]`.
-- **Cost of debt**: interest expense (from the income statement, falling
-  back to `info`) divided by total debt; a flat fallback rate is used if
-  neither is available.
-- **WACC**: capital-structure-weighted blend of cost of equity and
-  after-tax cost of debt, clamped to `[wacc_min, wacc_max]`.
+| Step | Approach |
+|---|---|
+| **Free cash flow** | Yahoo's `Free Cash Flow` line, else `Operating Cash Flow + CapEx` (CapEx is reported negative) |
+| **Growth** | CAGR over the *actual elapsed time* between the first and last statement, clamped to `[-5%, 15%]`. It is undefined when either endpoint is ≤ 0, and then falls back to `g`. |
+| **Forecast** | Growth decays linearly from the CAGR to `g`. The final forecast year grows at exactly `g`, so the forecast hands over smoothly to the perpetuity. |
+| **Cost of equity** | CAPM: `r_f + β × ERP`, with β clamped to `[0.5, 2.0]` |
+| **Cost of debt** | Interest expense ÷ total debt, clamped to `[1%, 15%]`. Falls back to 5%. |
+| **Tax rate** | The company's reported effective rate (latest year). Falls back to 21%. |
+| **WACC** | Weights based on market values, with both sides in the same currency. Clamped to `[6%, 20%]`. |
 
-## Regional parameters
+The base WACC is always above `g`, because the `Assumptions` constructor rejects
+any `g ≥ wacc_min`. A company whose latest FCF is negative is rejected with
+an explicit error, since an FCF-based DCF is not meaningful for it.
 
-| Region | Code | Risk-free proxy | Adjustment vs. US | Equity risk premium |
-|--------|------|------------------|--------------------|----------------------|
-| United States  | US | 10Y Treasury (`^TNX`) | baseline | 5.5% |
-| European Union | EU | US Treasury + spread  | -1.5%    | 5.5% |
-| United Kingdom | UK | US Treasury + spread  | -0.5%    | 5.5% |
-| China          | CN | US Treasury + spread  | -0.5%    | 7.0% |
-| Japan          | JP | US Treasury + spread  | -3.5%    | 5.5% |
+### Regional parameters
 
-Region is inferred from the ticker's exchange and country metadata,
-defaulting to US.
+| Currency | Risk-free rate | | Region | Equity risk premium |
+|---|---|---|---|---|
+| USD, HKD | US 10Y (`^TNX`) | | US, EU, UK, JP | 5.5% |
+| EUR | US 10Y − 1.5% | | CN (incl. HK) | 7.0% |
+| GBP | US 10Y − 0.5% | | | |
+| JPY | US 10Y − 2.5% | | | |
+| CNY | US 10Y − 2.0% | | | |
+| CHF | US 10Y − 3.5% | | | |
 
-## Project layout
+The region is determined from the company's country of domicile, falling back
+to the ticker suffix (`.DE`, `.L`, `.T`, ...). An ADR such as `TM` is therefore
+treated as Japanese, not American.
 
-```
-easyvaluator/
-├── assumptions.py   # Assumptions dataclass: every tunable number in one place
-├── fx.py            # FX rate lookup + currency conversion
-├── market_data.py   # All yfinance access lives here
-├── fcf.py           # Historical FCF extraction + growth-decay forecasting
-├── valuation.py      # WACC, DCF math, price_stock() pipeline, ValuationResult
-├── report.py        # print_report(): formats a ValuationResult for the terminal
-└── cli.py           # argparse entry point
-tests/
-├── test_fcf.py
-└── test_valuation.py
+## Architecture
+
+```mermaid
+flowchart LR
+    CLI[cli.py] --> V[valuation.Valuator]
+    V -->|protocol| P[market_data.MarketDataProvider]
+    P -.implements.-> Y[YahooFinanceProvider]
+    V --> FX[fx.FXConverter]
+    V --> R[regions]
+    V --> F[fcf]
+    V --> W[wacc]
+    V --> D[dcf]
+    V --> M[(models.ValuationResult)]
+    M --> REP[report: text / JSON]
 ```
 
-Valuation logic and I/O are deliberately separate: `price_stock()` only
-computes and returns data, `print_report()` only formats it. This keeps
-the math independently testable and reusable outside the CLI.
+```
+src/easyvaluator/
+├── assumptions.py   Assumptions: every tunable number, validated on construction
+├── models.py        Immutable data types: CompanySnapshot, WACC/DCF breakdowns, ValuationResult
+├── market_data.py   MarketDataProvider protocol + YahooFinanceProvider (the only yfinance import)
+├── fx.py            Currency normalization (GBp → GBP) and a caching, fail-loud FX converter
+├── regions.py       Region classification, risk-free rates and equity risk premiums
+├── fcf.py           Growth estimation and FCF projection (pure)
+├── wacc.py          Cost of capital (pure)
+├── dcf.py           Discounting and sensitivity grid (pure)
+├── valuation.py     Valuator: orchestrates the pipeline and collects warnings
+├── report.py        Text and JSON rendering
+└── cli.py           argparse entry point
+```
 
-## Testing
+Design principles:
+
+- **Pure core, I/O at the edges.** `fcf`, `wacc` and `dcf` are plain
+  functions over numbers. Only `market_data` talks to the network.
+- **Fail loudly instead of guessing silently.** A missing FX rate raises
+  `FXRateUnavailableError` rather than mixing currencies. Every softer
+  fallback is recorded in `ValuationResult.warnings`.
+- **One exception hierarchy.** Everything raised on purpose derives from `EasyValuatorError`.
+
+## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest -m "not network"        # offline suite (what CI runs)
+pytest -m network              # live smoke tests against Yahoo Finance
+ruff check . && ruff format --check . && mypy
+pre-commit install             # optional: run the linters on each commit
 ```
 
-Tests cover the pure valuation math (FCF forecasting, DCF present-value
-calculation, field-name fallback logic) with no network access required.
+The offline suite drives the whole pipeline through an in-memory `FakeProvider`
+(`tests/conftest.py`). This includes regression tests for the ADR currency mix-up
+and the pence-quoting bug.
 
-## Known limitations
+## Limitations
 
-- Risk-free rates for non-US regions are a fixed spread over the US 10Y
-  Treasury, not each region's own sovereign yield curve.
-- Regional equity risk premiums are static long-run estimates, not
-  updated from a live source.
-- Cost of debt falls back to a flat 5% assumption when interest expense
-  isn't available.
-- No sensitivity analysis (WACC × terminal growth grid) yet — see
-  Roadmap.
+- Non-US risk-free rates are a fixed spread over the US 10Y Treasury, not each
+  country's live sovereign yield. Currencies without a modelled spread (e.g. TWD, INR)
+  are discounted at the US rate, and the result carries a warning.
+- Equity risk premiums are static long-run estimates.
+- Historical FCF is converted at today's spot rate, so it is a presentation
+  aid rather than the FX history.
+- A single DCF on trailing FCF undervalues companies whose cash flow is
+  temporarily depressed. It also undervalues companies whose value rests on
+  growth beyond the forecast window. Use the sensitivity table.
+- Financial companies (banks, insurers) need a different model and are not a good fit.
 
 ## Roadmap
 
-- [ ] Sensitivity table: fair value across a WACC × terminal-growth grid
-- [ ] Cross-check DCF output against trading multiples (EV/EBITDA, P/E)
-- [ ] Monte Carlo scenario analysis on FCF growth
-- [ ] Simple web front end (e.g. Streamlit)
+- [x] Sensitivity table: fair value across a WACC × terminal-growth grid
+- [ ] Live sovereign yield curves per currency
+- [ ] Cross-check against trading multiples (EV/EBITDA, P/E)
+- [ ] Monte Carlo scenarios on growth and discount rate
+- [ ] Web front end (e.g. Streamlit)
 
-## Disclaimer
-
-For educational and research purposes only. Not financial advice. The
-model rests on simplifying assumptions that may not hold in practice —
-verify all figures independently before making investment decisions.
+A slide deck presenting the project is in [`docs/presentation.pdf`](docs/presentation.pdf).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
